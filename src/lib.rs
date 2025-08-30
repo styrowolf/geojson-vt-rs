@@ -13,10 +13,13 @@ use crate::wrap::wrap;
 
 mod clip;
 mod convert;
+mod preprocessed;
 mod simplify;
 mod tile;
 mod types;
 mod wrap;
+
+pub use preprocessed::PreprocessedGeoJSON;
 
 #[cfg(test)]
 mod tests;

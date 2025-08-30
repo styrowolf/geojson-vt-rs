@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use geojson_vt_rs::{geojson_to_tile, GeoJSONVT, Options, TileOptions};
+use geojson_vt_rs::{geojson_to_tile, GeoJSONVT, Options, PreprocessedGeoJSON, TileOptions};
 use std::fs;
 use std::hint::black_box;
 use std::str::FromStr;
@@ -27,6 +27,20 @@ fn generate_tile_index(c: &mut Criterion) {
         b.iter(|| {
             let index = GeoJSONVT::from_geojson(&features, &options);
             black_box(index);
+        })
+    });
+}
+
+fn generate_preprocessed(c: &mut Criterion) {
+    let json = fs::read_to_string("data/countries.geojson").unwrap();
+    let features = geojson::GeoJson::from_str(&json).unwrap();
+    let tile_options = TileOptions::default();
+    let max_zoom = Options::default().max_zoom;
+
+    c.bench_function("GeneratePreprocessed", |b| {
+        b.iter(|| {
+            let preprocessed = PreprocessedGeoJSON::new(&features, max_zoom, &tile_options);
+            black_box(preprocessed);
         })
     });
 }
@@ -82,6 +96,20 @@ fn large_geo_json_tile_index(c: &mut Criterion) {
     });
 }
 
+fn large_geo_json_preprocessed(c: &mut Criterion) {
+    let json = fs::read_to_string("fixtures/points.geojson").unwrap();
+    let features = geojson::GeoJson::from_str(&json).unwrap();
+    let tile_options = TileOptions::default();
+    let max_zoom = Options::default().max_zoom;
+
+    c.bench_function("LargeGeoJSONPreprocessed", |b| {
+        b.iter(|| {
+            let preprocessed = PreprocessedGeoJSON::new(&features, max_zoom, &tile_options);
+            black_box(preprocessed)
+        })
+    });
+}
+
 fn large_geo_json_get_tile(c: &mut Criterion) {
     let json = fs::read_to_string("fixtures/points.geojson").unwrap();
     let features = geojson::GeoJson::from_str(&json).unwrap();
@@ -94,8 +122,23 @@ fn large_geo_json_get_tile(c: &mut Criterion) {
         })
     });
 }
+
+fn large_geo_json_generate_tile(c: &mut Criterion) {
+    let json = fs::read_to_string("fixtures/points.geojson").unwrap();
+    let features = geojson::GeoJson::from_str(&json).unwrap();
+    let tile_options = TileOptions::default();
+    let max_zoom = Options::default().max_zoom;
+
+    let preprocessed = PreprocessedGeoJSON::new(&features, max_zoom, &tile_options);
+    c.bench_function("LargeGeoJSONGenerateTile", |b| {
+        b.iter(|| {
+            preprocessed.generate_tile(12, 1171, 1566);
+        })
+    });
+}
+
 fn large_geo_json_to_tile(c: &mut Criterion) {
-    let json = fs::read_to_string("data/countries.geojson").unwrap();
+    let json = fs::read_to_string("fixtures/points.geojson").unwrap();
     let features = geojson::GeoJson::from_str(&json).unwrap();
     c.bench_function("LargeGeoJSONToTile", |b| {
         b.iter(|| {
@@ -107,7 +150,7 @@ fn large_geo_json_to_tile(c: &mut Criterion) {
                 &TileOptions::default(),
                 false,
                 true,
-            );
+            )
         })
     });
 }
@@ -129,6 +172,21 @@ fn single_tile_index(c: &mut Criterion) {
     c.bench_function("SingleTileIndex", |b| {
         b.iter(|| {
             index.get_tile(12, 1171, 1566);
+        })
+    });
+}
+fn single_tile_preprocessed(c: &mut Criterion) {
+    let json = fs::read_to_string("fixtures/single-tile.json").unwrap();
+    let features = geojson::GeoJson::from_str(&json).unwrap();
+
+    let tile_options = TileOptions::default();
+    let max_zoom = Options::default().max_zoom;
+
+    let preprocessed = PreprocessedGeoJSON::new(&features, max_zoom, &tile_options);
+
+    c.bench_function("SingleTilePreprocessed", |b| {
+        b.iter(|| {
+            preprocessed.generate_tile(12, 1171, 1566);
         })
     });
 }
@@ -154,12 +212,16 @@ criterion_group!(
     benches,
     parse_geo_json,
     generate_tile_index,
+    generate_preprocessed,
     traverse_tile_pyramid,
     large_geo_json_parse,
     large_geo_json_tile_index,
+    large_geo_json_preprocessed,
     large_geo_json_get_tile,
+    large_geo_json_generate_tile,
     large_geo_json_to_tile,
     single_tile_index,
+    single_tile_preprocessed,
     single_tile_geo_json_to_tile
 );
 criterion_main!(benches);

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::fs;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::BufReader;
 use std::str::FromStr;
 
 use geojson::feature::Id;
@@ -14,6 +14,7 @@ use geojson::{
 use serde_json::{Number, Value};
 
 use crate::clip::Clipper;
+use crate::preprocessed::PreprocessedGeoJSON;
 use crate::simplify::simplify_wrapper;
 use crate::tile::EMPTY_TILE;
 use crate::types::*;
@@ -1040,4 +1041,226 @@ fn test_midpoint_calculation() {
             .unwrap(),
     );
     assert_eq!(features, &expected2);
+}
+
+#[test]
+fn preprocessed_geojson_simple() {
+    let geojson = GeoJson::from_reader(BufReader::new(
+        File::open("fixtures/single-tile.json").unwrap(),
+    ))
+    .unwrap();
+
+    let preprocessed = PreprocessedGeoJSON::new(&geojson, 18, &TileOptions::default());
+    let tile = preprocessed.generate_tile(12, 1171, 1566);
+
+    assert_eq!(tile.features.features.len(), 1);
+    let props = tile
+        .features
+        .features
+        .get(0)
+        .as_ref()
+        .unwrap()
+        .properties
+        .as_ref()
+        .unwrap();
+    let name = props.get("name").unwrap();
+    let str = name.as_str().unwrap();
+    assert_eq!(str, "P Street Northwest - Massachusetts Avenue Northwest");
+}
+
+#[test]
+fn preprocessed_geojson_clips() {
+    let geojson = GeoJson::from_reader(BufReader::new(
+        File::open("fixtures/us-states.json").unwrap(),
+    ))
+    .unwrap();
+
+    let preprocessed = PreprocessedGeoJSON::new(&geojson, 18, &TileOptions::default());
+    let tile = preprocessed.generate_tile(12, 1171, 1566);
+
+    assert_eq!(tile.features.features.len(), 2);
+    let props = tile
+        .features
+        .features
+        .get(0)
+        .as_ref()
+        .unwrap()
+        .properties
+        .as_ref()
+        .unwrap();
+    let name = props.get("name").unwrap();
+    let str = name.as_str().unwrap();
+    assert_eq!(str, "District of Columbia");
+}
+
+#[test]
+fn preprocessed_geojson_metrics() {
+    let geojson = GeoJson::from_reader(BufReader::new(
+        File::open("fixtures/single-tile.json").unwrap(),
+    ))
+    .unwrap();
+
+    let options = TileOptions {
+        buffer: 64,
+        tolerance: 3.,
+        line_metrics: true,
+        ..TileOptions::default()
+    };
+
+    let k_epsilon = 1e-5;
+
+    let preprocessed = PreprocessedGeoJSON::new(&geojson, 18, &options);
+
+    let tile_left = preprocessed.generate_tile(13, 2342, 3133);
+    assert_eq!(tile_left.features.features.len(), 1);
+
+    let tile_right = preprocessed.generate_tile(13, 2343, 3133);
+    assert_eq!(tile_right.features.features.len(), 1);
+
+    let left_props = tile_left
+        .features
+        .features
+        .get(0)
+        .as_ref()
+        .unwrap()
+        .properties
+        .as_ref()
+        .unwrap();
+    let left_clip_start = left_props
+        .get("mapbox_clip_start")
+        .unwrap()
+        .as_f64()
+        .unwrap();
+    assert!((&left_clip_start).ulps_eq(&0.0, 0.0, 4));
+    let left_clip_end = left_props.get("mapbox_clip_end").unwrap().as_f64().unwrap();
+    assert!(left_clip_end.abs_diff_eq(&0.42103, k_epsilon));
+
+    let right_props = tile_right
+        .features
+        .features
+        .get(0)
+        .as_ref()
+        .unwrap()
+        .properties
+        .as_ref()
+        .unwrap();
+    let right_clip_start = right_props
+        .get("mapbox_clip_start")
+        .unwrap()
+        .as_f64()
+        .unwrap();
+    assert!(right_clip_start.abs_diff_eq(&0.40349, k_epsilon));
+    let right_clip_end = right_props
+        .get("mapbox_clip_end")
+        .unwrap()
+        .as_f64()
+        .unwrap();
+    assert!((&right_clip_end).ulps_eq(&1.0, 0.0, 4));
+}
+
+#[test]
+fn preprocessed_geojson_clip_vertex_on_tile_border() {
+    let data = r#"{
+        "type": "Feature",
+        "geometry": {
+            "type": "LineString",
+            "coordinates":[
+                [-77.031373697916663,38.895516493055553],
+                [-77.01416015625,38.887532552083336],
+                [-76.99,38.87]
+            ]
+        }
+    }"#; // The second node is exactly on the (13, 2344, 3134) tile border.
+
+    let geojson = GeoJson::from_str(data).unwrap();
+
+    let options = TileOptions {
+        extent: 8192,
+        buffer: 2048,
+        line_metrics: true,
+        ..TileOptions::default()
+    };
+
+    let k_epsilon = 1e-5;
+
+    let preprocessed = PreprocessedGeoJSON::new(&geojson, 18, &options);
+    let tile = preprocessed.generate_tile(13, 2344, 3134);
+    assert!(!tile.features.features.is_empty());
+
+    let expected: LineStringType = LineStringType::from(&[vec![-2048., 2747.], vec![408., 5037.]]);
+
+    let actual = match &tile.features.features[0].geometry.as_ref().unwrap().value {
+        geojson::Value::LineString(line_string) => line_string,
+        _ => panic!("must be linestring"),
+    };
+    assert_eq!(actual, &expected);
+
+    // Check line metrics
+    let props = tile
+        .features
+        .features
+        .get(0)
+        .as_ref()
+        .unwrap()
+        .properties
+        .as_ref()
+        .unwrap();
+    let clip_start1 = props.get("mapbox_clip_start").unwrap().as_f64().unwrap();
+    let clip_end1 = props.get("mapbox_clip_end").unwrap().as_f64().unwrap();
+    assert!(0.660622.abs_diff_eq(&clip_start1, k_epsilon));
+    assert!(1.0.abs_diff_eq(&clip_end1, k_epsilon));
+}
+
+#[test]
+fn preprocessed_geojson_comparison_with_geojson_to_tile() {
+    let geojson = GeoJson::from_reader(BufReader::new(
+        File::open("fixtures/single-tile.json").unwrap(),
+    ))
+    .unwrap();
+
+    let options = TileOptions::default();
+    let preprocessed = PreprocessedGeoJSON::new(&geojson, 18, &options);
+
+    // Test multiple tiles to ensure they match geojson_to_tile results
+    let test_tiles = vec![(12, 1171, 1566), (10, 292, 391), (15, 9372, 12534)];
+
+    for (z, x, y) in test_tiles {
+        let tile_from_preprocessed = preprocessed.generate_tile(z, x, y);
+        let tile_from_geojson_to_tile = geojson_to_tile(&geojson, z, x, y, &options, true, true);
+
+        // Compare feature count
+        assert_eq!(
+            tile_from_preprocessed.features.features.len(),
+            tile_from_geojson_to_tile.features.features.len(),
+            "Feature count mismatch for tile {}/{}/{}",
+            z,
+            x,
+            y
+        );
+
+        // Compare point counts
+        assert_eq!(
+            tile_from_preprocessed.num_points, tile_from_geojson_to_tile.num_points,
+            "Point count mismatch for tile {}/{}/{}",
+            z, x, y
+        );
+
+        // Compare geometries if there are features
+        if !tile_from_preprocessed.features.features.is_empty() {
+            let preprocessed_geom = &tile_from_preprocessed.features.features[0]
+                .geometry
+                .as_ref()
+                .unwrap();
+            let geojson_to_tile_geom = &tile_from_geojson_to_tile.features.features[0]
+                .geometry
+                .as_ref()
+                .unwrap();
+
+            assert_eq!(
+                preprocessed_geom, geojson_to_tile_geom,
+                "Geometry mismatch for tile {}/{}/{}",
+                z, x, y
+            );
+        }
+    }
 }
