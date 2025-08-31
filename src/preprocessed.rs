@@ -4,6 +4,7 @@ use crate::tile::Tile;
 use crate::types::VtFeatures;
 use crate::{clip, convert, geojson_to_feature_collection, wrap, InternalTile, TileOptions};
 
+#[derive(Clone)]
 pub struct PreprocessedGeoJSON {
     features: VtFeatures,
     max_zoom: u8,
